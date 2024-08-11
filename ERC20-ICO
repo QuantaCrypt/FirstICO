@@ -1,0 +1,122 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.16;
+
+interface IERC20 {
+    function transfer(address to, uint amount) external returns (bool);
+    function decimals() external view returns (uint);
+    function balanceOf(address account) external view returns (uint);
+} /**When you define an interface, you're essentially saying, 
+"Here is a list of functions that any contract that implements 
+this interface must have." */
+
+contract TokenSale {
+    address public owner;
+    IERC20 public token;
+    uint public tokenPriceInWei;
+    uint public tokensSold;
+    uint public saleStart;
+    uint public saleEnd;
+    uint public minPurchase;
+    uint public maxPurchase;
+    bool public saleActive;
+
+    mapping(address => bool) public whitelist;
+    mapping(address => uint) public totalPurchased; // Yeni mapping: Her kullanıcının toplam alımını takip eder.
+
+    event TokensPurchased(address indexed buyer, uint amount);
+    event SaleStarted(uint start, uint end);
+    event SaleEnded();
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "You are not the owner");
+        _;
+    }
+
+    modifier onlyWhileOpen() {
+        require(saleActive, "Sale is not active");
+        require(block.timestamp >= saleStart && block.timestamp <= saleEnd, "Sale period is over");
+        _;
+    }
+
+    constructor(
+        address  _tokenAddress,
+        uint _tokenPriceInWei,
+        uint _saleDurationInDays,
+        uint _minPurchase,
+        uint _maxPurchase
+    ) {
+        owner = msg.sender;
+        token = IERC20(_tokenAddress);
+        tokenPriceInWei = _tokenPriceInWei;
+        minPurchase = _minPurchase;
+        maxPurchase = _maxPurchase;
+        saleStart = block.timestamp;
+        saleEnd = saleStart + _saleDurationInDays * 1 days;
+        saleActive = true;
+
+        emit SaleStarted(saleStart, saleEnd);
+    }
+
+    function whitelistAddress(address _addr) public onlyOwner {
+        whitelist[_addr] = true;
+    }
+
+    function removeWhitelistAddress(address _addr) public onlyOwner {
+        whitelist[_addr] = false;
+    }
+
+    function purchaseTokens() public payable onlyWhileOpen {
+        require(whitelist[msg.sender], "You are not whitelisted");
+        require(msg.value >= minPurchase, "Amount is below minimum purchase");
+
+        uint tokensToBuy = msg.value / tokenPriceInWei;
+        uint remainder = msg.value - tokensToBuy * tokenPriceInWei;
+
+        require(tokensToBuy + totalPurchased[msg.sender] <= maxPurchase, "Exceeds max purchase limit");
+        require(tokensToBuy <= token.balanceOf(address(this)), "Not enough tokens left for sale");
+
+        totalPurchased[msg.sender] += tokensToBuy;
+        tokensSold += tokensToBuy;
+
+        require(token.transfer(msg.sender, tokensToBuy * 10 ** token.decimals()), "Token transfer failed");
+
+        if (remainder > 0) {
+            payable(msg.sender).transfer(remainder); // Send the rest back
+        }
+
+        emit TokensPurchased(msg.sender, tokensToBuy);
+    }
+
+    function endSale() public onlyOwner {
+        require(block.timestamp > saleEnd, "Sale period not yet over");
+
+        saleActive = false;
+        emit SaleEnded();
+
+        // Transfer remaining tokens to the owner
+        uint remainingTokens = token.balanceOf(address(this));
+        if (remainingTokens > 0) {
+            require(token.transfer(owner, remainingTokens), "Token transfer failed");
+        }
+
+        // Transfer the collected funds to the owner
+        payable(owner).transfer(address(this).balance);
+    }
+
+    function extendSale(uint _extraDays) public onlyOwner {
+        require(saleActive, "Sale is not active");
+        saleEnd += _extraDays * 1 days;
+    }
+
+    function setTokenPrice(uint _newPriceInWei) public onlyOwner {
+        tokenPriceInWei = _newPriceInWei;
+    }
+
+    function withdraw() public onlyOwner {
+        payable(owner).transfer(address(this).balance);
+    }
+
+    function getSaleDetails() public view returns (uint, uint, uint, uint, uint) {
+        return (saleStart, saleEnd, minPurchase, maxPurchase, tokensSold);
+    }
+}
